@@ -1,0 +1,72 @@
+
+name: RDP
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'OS Type'
+        required: true
+        default: 'windows'
+      region:
+        description: 'Ngrok Region'
+        required: true
+        default: 'eu'
+      password:
+        description: 'Server Password'
+        required: true
+        default: '!Ent#Pass2026'
+      duration:
+        description: 'Duration in minutes'
+        required: true
+        default: '180'
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    steps:
+      - name: Configure RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create Random User & Password
+        run: |
+          $username = "User" + (Get-Random -Minimum 1000 -Maximum 9999)
+          $password = "${{ github.event.inputs.password }}"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Ngrok
+        run: |
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "C:\ngrok"
+          C:\ngrok\ngrok.exe config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+      - name: Start Ngrok Tunnel
+        run: |
+          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --region ${{ github.event.inputs.region }}" -NoNewWindow
+          Start-Sleep -Seconds 10
+          $ngrok_api = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+          $public_url = $ngrok_api.tunnels[0].public_url
+          echo "NGROK_URL=$public_url" >> $env:GITHUB_ENV
+
+      - name: Print Credentials
+        run: |
+          Write-Host "=== RDP ACCESS ==="
+          Write-Host "Address: $env:NGROK_URL"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "=================="
+
+      - name: Keep Alive
+        run: |
+          while ($true) {
+            Write-Host "[$(Get-Date)] RDP Active..."
+            Start-Sleep -Seconds 300
+          }
